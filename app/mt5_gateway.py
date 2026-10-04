@@ -282,3 +282,32 @@ class MT5Gateway:
             "price": payload.get("price"),
             "request_id": payload.get("request_id"),
         }
+
+
+    def open_positions(self) -> list[dict]:
+        if not self._ready():
+            return []
+        positions = self.mt5.positions_get(symbol=settings.symbol)
+        if positions is None:
+            return []
+        return [
+            {
+                "ticket": p.ticket,
+                "symbol": p.symbol,
+                "volume": p.volume,
+                "type": p.type,
+                "price_open": p.price_open,
+                "sl": p.sl,
+                "tp": p.tp,
+                "profit": p.profit,
+                "magic": p.magic,
+                "comment": p.comment,
+            }
+            for p in positions
+        ]
+
+    def latest_completed_bar_time(self, timeframe: str = "M15") -> str | None:
+        frame = self.bars(timeframe, 1)
+        if frame.empty:
+            return None
+        return frame.iloc[-1]["time"].isoformat()
