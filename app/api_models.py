@@ -8,3 +8,9 @@ class StrategyRegistrationRequest(BaseModel):
     parameters: dict = Field(default_factory=dict)
     metrics: dict = Field(default_factory=dict)
     live_approved: bool = False
+
+
+class MetaTrainingRequest(BaseModel):
+    version: str
+    rows: list[dict]
+    stage: str = "observer"
