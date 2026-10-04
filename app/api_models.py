@@ -14,3 +14,12 @@ class MetaTrainingRequest(BaseModel):
     version: str
     rows: list[dict]
     stage: str = "observer"
+
+
+class EconomicEventRequest(BaseModel):
+    name: str
+    scheduled_at: str
+    impact: str = "high"
+    currency: str = "USD"
+    source: str | None = None
+    external_id: str | None = None
