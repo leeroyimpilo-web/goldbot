@@ -296,12 +296,17 @@ class MT5Gateway:
                 "symbol": p.symbol,
                 "volume": p.volume,
                 "type": p.type,
+                "side": "buy"
+                if p.type == getattr(self.mt5, "POSITION_TYPE_BUY", 0)
+                else "sell",
                 "price_open": p.price_open,
                 "sl": p.sl,
                 "tp": p.tp,
                 "profit": p.profit,
                 "magic": p.magic,
                 "comment": p.comment,
+                "time": p.time,
+                "time_msc": getattr(p, "time_msc", 0),
             }
             for p in positions
         ]
@@ -359,3 +364,81 @@ class MT5Gateway:
         if spreads.empty:
             return 50.0
         return float((spreads <= current_spread).mean() * 100.0)
+
+
+    def modify_position_sl_tp(self, ticket: int, sl: float, tp: float) -> dict:
+        if not self._ready():
+            return {"ok": False, "reason": "mt5_unavailable"}
+
+        request = {
+            "action": self.mt5.TRADE_ACTION_SLTP,
+            "position": int(ticket),
+            "symbol": settings.symbol,
+            "sl": float(sl),
+            "tp": float(tp),
+            "magic": 260100,
+            "comment": "GoldBot risk management",
+        }
+        result = self.mt5.order_send(request)
+        if result is None:
+            return {
+                "ok": False,
+                "reason": "modify_returned_none",
+                "last_error": str(self.mt5.last_error()),
+            }
+        payload = result._asdict()
+        retcode = int(payload.get("retcode", -1))
+        return {
+            "ok": retcode == getattr(self.mt5, "TRADE_RETCODE_DONE", 10009),
+            "retcode": retcode,
+            "comment": payload.get("comment"),
+        }
+
+    def close_position(self, position: dict) -> dict:
+        if not self._ready():
+            return {"ok": False, "reason": "mt5_unavailable"}
+
+        tick = self.mt5.symbol_info_tick(settings.symbol)
+        if tick is None:
+            return {"ok": False, "reason": "tick_unavailable"}
+
+        if position["side"] == "buy":
+            order_type = self.mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:
+            order_type = self.mt5.ORDER_TYPE_BUY
+            price = tick.ask
+
+        request = {
+            "action": self.mt5.TRADE_ACTION_DEAL,
+            "symbol": settings.symbol,
+            "position": int(position["ticket"]),
+            "volume": float(position["volume"]),
+            "type": order_type,
+            "price": float(price),
+            "deviation": 20,
+            "magic": 260100,
+            "comment": "GoldBot managed exit",
+            "type_time": self.mt5.ORDER_TIME_GTC,
+            "type_filling": self.mt5.ORDER_FILLING_IOC,
+        }
+        result = self.mt5.order_send(request)
+        if result is None:
+            return {
+                "ok": False,
+                "reason": "close_returned_none",
+                "last_error": str(self.mt5.last_error()),
+            }
+        payload = result._asdict()
+        retcode = int(payload.get("retcode", -1))
+        success_codes = {
+            getattr(self.mt5, "TRADE_RETCODE_DONE", 10009),
+            getattr(self.mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010),
+        }
+        return {
+            "ok": retcode in success_codes,
+            "retcode": retcode,
+            "comment": payload.get("comment"),
+            "deal": payload.get("deal"),
+            "price": payload.get("price"),
+        }
