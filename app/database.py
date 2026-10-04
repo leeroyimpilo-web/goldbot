@@ -172,6 +172,87 @@ class EconomicEventRecord(Base):
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
 
 
+class OrderRecord(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    strategy_version: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[str] = mapped_column(String(8))
+    volume: Mapped[float] = mapped_column(Float)
+    requested_price: Mapped[float] = mapped_column(Float)
+    stop_price: Mapped[float] = mapped_column(Float)
+    target_price: Mapped[float] = mapped_column(Float)
+    broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    broker_deal_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    request_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    response_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class FillRecord(Base):
+    __tablename__ = "fills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    broker_deal_id: Mapped[str] = mapped_column(String(128), index=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[str] = mapped_column(String(8))
+    volume: Mapped[float] = mapped_column(Float)
+    price: Mapped[float] = mapped_column(Float)
+    slippage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+
+
+class RiskSnapshot(Base):
+    __tablename__ = "risk_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    equity: Mapped[float] = mapped_column(Float)
+    balance: Mapped[float] = mapped_column(Float)
+    daily_return: Mapped[float] = mapped_column(Float)
+    weekly_return: Mapped[float] = mapped_column(Float)
+    drawdown: Mapped[float] = mapped_column(Float)
+    consecutive_losses: Mapped[int] = mapped_column(Integer, default=0)
+    trading_allowed: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class Heartbeat(Base):
+    __tablename__ = "heartbeats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    component: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SystemError(Base):
+    __tablename__ = "system_errors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    component: Mapped[str] = mapped_column(String(64), index=True)
+    error_type: Mapped[str] = mapped_column(String(128), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class DeploymentVersion(Base):
+    __tablename__ = "deployment_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    version: Mapped[str] = mapped_column(String(64), index=True)
+    git_sha: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    environment: Mapped[str] = mapped_column(String(32), index=True)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
