@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+import time
+
+from app.config import settings
+from app.decision_engine import DecisionEngine
+from app.execution import ExecutionManager
+from app.mt5_gateway import MT5Gateway
+from app.strategy_registry import is_strategy_approved
+from app.trade_planner import TradePlan
+
+log = logging.getLogger("goldbot.runner")
+STATE_PATH = Path("runtime_state.json")
+
+
+def load_state() -> dict:
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    tmp = STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.replace(STATE_PATH)
+
+
+def run_cycle(
+    gateway: MT5Gateway,
+    decision_engine: DecisionEngine,
+    execution_manager: ExecutionManager,
+    state: dict,
+) -> dict:
+    latest_bar = gateway.latest_completed_bar_time("M15")
+    if latest_bar is None:
+        return {"status": "blocked", "reason": "m15_bar_unavailable"}
+
+    if state.get("last_processed_m15_bar") == latest_bar:
+        return {"status": "idle", "reason": "bar_already_processed", "bar": latest_bar}
+
+    state["last_processed_m15_bar"] = latest_bar
+    save_state(state)
+
+    open_positions = gateway.open_positions()
+    goldbot_positions = [
+        p for p in open_positions
+        if int(p.get("magic", 0)) == 260100
+    ]
+    if goldbot_positions:
+        return {
+            "status": "manage_only",
+            "reason": "existing_goldbot_position",
+            "positions": goldbot_positions,
+        }
+
+    decision = decision_engine.evaluate()
+    if decision.get("status") != "candidate":
+        return decision
+
+    plan = TradePlan(**decision["plan"])
+    approved = is_strategy_approved(
+        plan.strategy_version,
+        settings.trading_mode,
+    )
+    execution = execution_manager.submit(
+        plan,
+        strategy_approved=approved,
+    )
+    return {
+        "status": "execution_attempt",
+        "decision": decision,
+        "execution": execution,
+    }
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    gateway = MT5Gateway()
+    decision_engine = DecisionEngine(gateway)
+    execution_manager = ExecutionManager(gateway)
+    state = load_state()
+
+    log.info(
+        "GoldBot runner starting: mode=%s live_flag=%s symbol=%s",
+        settings.trading_mode,
+        settings.live_trading_enabled,
+        settings.symbol,
+    )
+
+    while True:
+        try:
+            result = run_cycle(
+                gateway,
+                decision_engine,
+                execution_manager,
+                state,
+            )
+            log.info("cycle=%s", result.get("status"))
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            log.exception("GoldBot cycle failed")
+        time.sleep(10)
+
+
+if __name__ == "__main__":
+    main()
