@@ -9,6 +9,7 @@ from app.config import settings
 from app.decision_engine import DecisionEngine
 from app.execution import ExecutionManager
 from app.mt5_gateway import MT5Gateway
+from app.runtime_risk import update_runtime_risk
 from app.strategy_registry import is_strategy_approved
 from app.trade_planner import TradePlan
 
@@ -37,12 +38,28 @@ def run_cycle(
     execution_manager: ExecutionManager,
     state: dict,
 ) -> dict:
+    account = gateway.account_snapshot()
+    if not account.get("available"):
+        return {"status": "blocked", "reason": "account_unavailable"}
+
+    risk_metrics = update_runtime_risk(
+        state,
+        equity=float(account["equity"]),
+    )
+
     latest_bar = gateway.latest_completed_bar_time("M15")
     if latest_bar is None:
+        save_state(state)
         return {"status": "blocked", "reason": "m15_bar_unavailable"}
 
     if state.get("last_processed_m15_bar") == latest_bar:
-        return {"status": "idle", "reason": "bar_already_processed", "bar": latest_bar}
+        save_state(state)
+        return {
+            "status": "idle",
+            "reason": "bar_already_processed",
+            "bar": latest_bar,
+            "risk": risk_metrics.to_dict(),
+        }
 
     state["last_processed_m15_bar"] = latest_bar
     save_state(state)
@@ -57,9 +74,15 @@ def run_cycle(
             "status": "manage_only",
             "reason": "existing_goldbot_position",
             "positions": goldbot_positions,
+            "risk": risk_metrics.to_dict(),
         }
 
-    decision = decision_engine.evaluate()
+    decision = decision_engine.evaluate(
+        daily_return=risk_metrics.daily_return,
+        weekly_return=risk_metrics.weekly_return,
+        drawdown=risk_metrics.drawdown,
+        consecutive_full_stop_losses=int(state.get("consecutive_full_stop_losses", 0)),
+    )
     if decision.get("status") != "candidate":
         return decision
 
@@ -76,6 +99,7 @@ def run_cycle(
         "status": "execution_attempt",
         "decision": decision,
         "execution": execution,
+        "risk": risk_metrics.to_dict(),
     }
 
 
