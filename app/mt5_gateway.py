@@ -311,3 +311,30 @@ class MT5Gateway:
         if frame.empty:
             return None
         return frame.iloc[-1]["time"].isoformat()
+
+
+    def ticks_range(self, start: datetime, end: datetime) -> pd.DataFrame:
+        if not self._ready():
+            return pd.DataFrame()
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("Tick range must use timezone-aware datetimes")
+        if end <= start:
+            raise ValueError("Tick range end must be after start")
+
+        ticks = self.mt5.copy_ticks_range(
+            settings.symbol,
+            start.astimezone(timezone.utc),
+            end.astimezone(timezone.utc),
+            self.mt5.COPY_TICKS_ALL,
+        )
+        if ticks is None or len(ticks) == 0:
+            return pd.DataFrame()
+
+        frame = pd.DataFrame(ticks)
+        if "time_msc" in frame.columns:
+            frame["timestamp_utc"] = pd.to_datetime(frame["time_msc"], unit="ms", utc=True)
+        else:
+            frame["timestamp_utc"] = pd.to_datetime(frame["time"], unit="s", utc=True)
+        frame["spread"] = frame["ask"] - frame["bid"]
+        frame["mid"] = (frame["ask"] + frame["bid"]) / 2.0
+        return frame.sort_values("timestamp_utc").reset_index(drop=True)
