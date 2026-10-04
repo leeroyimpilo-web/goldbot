@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 import time
 
+from app.audit import record_heartbeat, record_order_attempt, record_risk_snapshot
 from app.config import settings
 from app.decision_engine import DecisionEngine
 from app.execution import ExecutionManager
@@ -47,6 +48,42 @@ def run_cycle(
     risk_metrics = update_runtime_risk(
         state,
         equity=float(account["equity"]),
+    )
+
+    audit_ok = record_risk_snapshot(
+        equity=float(account["equity"]),
+        balance=float(account["balance"]),
+        daily_return=risk_metrics.daily_return,
+        weekly_return=risk_metrics.weekly_return,
+        drawdown=risk_metrics.drawdown,
+        consecutive_losses=int(state.get("consecutive_full_stop_losses", 0)),
+        trading_allowed=True,
+        reason="runner_cycle",
+    )
+    if audit_ok:
+        state["db_logging_failures"] = 0
+    else:
+        state["db_logging_failures"] = int(state.get("db_logging_failures", 0)) + 1
+
+    if (
+        int(state.get("db_logging_failures", 0)) >= 3
+        and settings.trading_mode.lower() in {"demo", "live"}
+    ):
+        save_state(state)
+        return {
+            "status": "blocked",
+            "reason": "database_audit_logging_failed_repeatedly",
+            "risk": risk_metrics.to_dict(),
+        }
+
+    record_heartbeat(
+        "runner",
+        "ok",
+        {
+            "mode": settings.trading_mode,
+            "symbol": settings.symbol,
+            "db_logging_failures": int(state.get("db_logging_failures", 0)),
+        },
     )
 
     open_positions = gateway.open_positions()
@@ -123,6 +160,7 @@ def run_cycle(
         plan,
         strategy_approved=approved,
     )
+    record_order_attempt(plan=plan, execution=execution)
 
     if execution.get("sent"):
         state["active_plan"] = {
