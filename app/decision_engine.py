@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 
+from app.ai_guard import evaluate_ai_gate
 from app.economic_calendar import current_news_gate
 from app.indicators import build_market_snapshot
+from app.ml_features import current_meta_features
+from app.ml_meta import load_model, predict_success_probability
+from app.model_registry import latest_approved_model
 from app.mt5_gateway import MT5Gateway
 from app.regime import classify_regime
 from app.risk import RiskState, evaluate_risk
@@ -68,6 +72,44 @@ class DecisionEngine:
         spread = float(tick["ask"] - tick["bid"])
         median_spread = self.gateway.recent_median_spread(points=250)
         spread_ratio = spread / median_spread if median_spread and median_spread > 0 else 1.0
+        spread_percentile = self.gateway.spread_percentile(spread, points=250)
+
+        approved_model = None
+        ai_probability = None
+        ai_error = None
+        try:
+            approved_model = latest_approved_model()
+        except Exception as exc:
+            ai_error = f"model_registry_unavailable:{type(exc).__name__}"
+
+        if approved_model:
+            try:
+                features = current_meta_features(
+                    h1,
+                    m15,
+                    spread_percentile=spread_percentile,
+                    news_proximity_minutes=abs(news_gate.minutes_to_event)
+                    if news_gate.minutes_to_event is not None
+                    else 999.0,
+                )
+                model = load_model(approved_model["artifact_path"])
+                ai_probability = predict_success_probability(model, features)
+            except Exception as exc:
+                ai_error = f"approved_model_prediction_failed:{type(exc).__name__}"
+
+        ai_gate = evaluate_ai_gate(
+            ai_probability,
+            model_approved=approved_model is not None,
+        )
+        if approved_model is not None and (ai_error or not ai_gate.allowed):
+            return {
+                "status": "blocked",
+                "reason": ai_error or ai_gate.reason,
+                "regime": asdict(regime),
+                "news_gate": news_gate.to_dict(),
+                "ai_gate": ai_gate.to_dict(),
+                "ai_model": approved_model,
+            }
 
         risk = evaluate_risk(
             RiskState(
@@ -148,8 +190,11 @@ class DecisionEngine:
                 "consecutive_full_stop_losses": consecutive_full_stop_losses,
             },
             "spread_ratio": spread_ratio,
+            "spread_percentile": spread_percentile,
             "data_age_seconds": data_age_seconds,
             "news_gate": news_gate.to_dict(),
+            "ai_gate": ai_gate.to_dict(),
+            "ai_model": approved_model,
             "plan": plan.to_dict(),
             "order_check": check,
             "execution": "NOT_SENT",
