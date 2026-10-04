@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass
+from decimal import Decimal, ROUND_FLOOR
 
 from app.risk import RiskDecision
 from app.strategy import StrategySignal
@@ -25,7 +26,13 @@ class TradePlan:
 def floor_to_step(value: float, step: float) -> float:
     if step <= 0:
         raise ValueError("Volume step must be positive")
-    return max(0.0, (value // step) * step)
+    if value <= 0:
+        return 0.0
+
+    value_d = Decimal(str(value))
+    step_d = Decimal(str(step))
+    units = (value_d / step_d).to_integral_value(rounding=ROUND_FLOOR)
+    return float(units * step_d)
 
 
 def build_trade_plan(
