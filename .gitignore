@@ -1,0 +1,1 @@
+.env\n.venv/\n__pycache__/\n.pytest_cache/\n*.pyc\nruntime_state.json\nmodels/*.joblib\n
