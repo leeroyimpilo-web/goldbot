@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
 
+from app.economic_calendar import current_news_gate
 from app.indicators import build_market_snapshot
 from app.mt5_gateway import MT5Gateway
 from app.regime import classify_regime
@@ -15,7 +17,14 @@ class DecisionEngine:
         self.gateway = gateway
         self.strategy = MTFBreakoutV1()
 
-    def evaluate(self) -> dict:
+    def evaluate(
+        self,
+        *,
+        daily_return: float = 0.0,
+        weekly_return: float = 0.0,
+        drawdown: float = 0.0,
+        consecutive_full_stop_losses: int = 0,
+    ) -> dict:
         account = self.gateway.account_snapshot()
         if not account.get("available"):
             return {"status": "blocked", "reason": "account_unavailable", "account": account}
@@ -24,6 +33,10 @@ class DecisionEngine:
         if not tick.get("available"):
             return {"status": "blocked", "reason": "tick_unavailable", "tick": tick}
 
+        tick_time = datetime.fromtimestamp(float(tick["time_msc"]) / 1000.0, tz=timezone.utc)
+        data_age_seconds = max(0.0, (datetime.now(timezone.utc) - tick_time).total_seconds())
+        data_fresh = data_age_seconds <= 30.0
+
         h1 = self.gateway.bars("H1", 600)
         m15 = self.gateway.bars("M15", 300)
         if h1.empty or m15.empty:
@@ -31,6 +44,7 @@ class DecisionEngine:
 
         snapshot = build_market_snapshot(h1, m15)
         regime = classify_regime(h1)
+        news_gate = current_news_gate()
 
         if not regime.allow_new_entries:
             return {
@@ -38,6 +52,7 @@ class DecisionEngine:
                 "reason": f"regime_{regime.name.lower()}",
                 "regime": asdict(regime),
                 "market": asdict(snapshot),
+                "news_gate": news_gate.to_dict(),
             }
 
         signal = self.strategy.generate(snapshot)
@@ -47,6 +62,7 @@ class DecisionEngine:
                 "reason": "strategy_no_signal",
                 "regime": asdict(regime),
                 "market": asdict(snapshot),
+                "news_gate": news_gate.to_dict(),
             }
 
         spread = float(tick["ask"] - tick["bid"])
@@ -56,12 +72,13 @@ class DecisionEngine:
         risk = evaluate_risk(
             RiskState(
                 equity=float(account["equity"]),
-                daily_return=0.0,
-                weekly_return=0.0,
-                drawdown=0.0,
+                daily_return=daily_return,
+                weekly_return=weekly_return,
+                drawdown=drawdown,
+                consecutive_full_stop_losses=consecutive_full_stop_losses,
                 broker_connected=True,
-                data_fresh=True,
-                news_blackout=False,
+                data_fresh=data_fresh,
+                news_blackout=news_gate.blocked,
                 extreme_volatility=regime.name == "EXTREME_VOL",
                 spread_ratio=spread_ratio,
             )
@@ -73,6 +90,8 @@ class DecisionEngine:
                 "regime": asdict(regime),
                 "risk": asdict(risk),
                 "spread_ratio": spread_ratio,
+                "data_age_seconds": data_age_seconds,
+                "news_gate": news_gate.to_dict(),
             }
 
         executable_entry = float(tick["ask"] if signal.side == "buy" else tick["bid"])
@@ -97,7 +116,12 @@ class DecisionEngine:
             risk_pct=risk.risk_pct * regime.risk_multiplier,
         )
         if effective_risk.risk_pct <= 0:
-            return {"status": "no_trade", "reason": "regime_risk_zero", "regime": asdict(regime)}
+            return {
+                "status": "no_trade",
+                "reason": "regime_risk_zero",
+                "regime": asdict(regime),
+                "news_gate": news_gate.to_dict(),
+            }
 
         plan = build_trade_plan(
             signal=signal,
@@ -117,7 +141,15 @@ class DecisionEngine:
             "reason": "order_check_passed" if check.get("ok") else "order_check_failed",
             "regime": asdict(regime),
             "risk": asdict(effective_risk),
+            "risk_state": {
+                "daily_return": daily_return,
+                "weekly_return": weekly_return,
+                "drawdown": drawdown,
+                "consecutive_full_stop_losses": consecutive_full_stop_losses,
+            },
             "spread_ratio": spread_ratio,
+            "data_age_seconds": data_age_seconds,
+            "news_gate": news_gate.to_dict(),
             "plan": plan.to_dict(),
             "order_check": check,
             "execution": "NOT_SENT",
