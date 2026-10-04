@@ -442,3 +442,46 @@ class MT5Gateway:
             "deal": payload.get("deal"),
             "price": payload.get("price"),
         }
+
+
+    def recent_closed_goldbot_deals(self, days: int = 30) -> list[dict]:
+        if not self._ready():
+            return []
+
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=max(1, days))
+        deals = self.mt5.history_deals_get(start, end)
+        if deals is None:
+            return []
+
+        deal_entry_out = getattr(self.mt5, "DEAL_ENTRY_OUT", 1)
+        deal_entry_out_by = getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3)
+        results = []
+        for d in deals:
+            if d.symbol != settings.symbol:
+                continue
+            if int(getattr(d, "magic", 0)) != 260100:
+                continue
+            if int(getattr(d, "entry", -1)) not in {deal_entry_out, deal_entry_out_by}:
+                continue
+
+            net = (
+                float(getattr(d, "profit", 0.0))
+                + float(getattr(d, "commission", 0.0))
+                + float(getattr(d, "swap", 0.0))
+                + float(getattr(d, "fee", 0.0))
+            )
+            results.append(
+                {
+                    "ticket": int(d.ticket),
+                    "position_id": int(getattr(d, "position_id", 0)),
+                    "time": int(d.time),
+                    "time_msc": int(getattr(d, "time_msc", 0)),
+                    "price": float(d.price),
+                    "volume": float(d.volume),
+                    "net_profit": net,
+                    "comment": str(getattr(d, "comment", "")),
+                }
+            )
+
+        return sorted(results, key=lambda x: (x["time_msc"], x["ticket"]))
