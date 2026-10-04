@@ -338,3 +338,24 @@ class MT5Gateway:
         frame["spread"] = frame["ask"] - frame["bid"]
         frame["mid"] = (frame["ask"] + frame["bid"]) / 2.0
         return frame.sort_values("timestamp_utc").reset_index(drop=True)
+
+
+    def spread_percentile(self, current_spread: float, points: int = 250) -> float:
+        if not self._ready():
+            return 50.0
+
+        start = datetime.now(timezone.utc) - timedelta(hours=2)
+        ticks = self.mt5.copy_ticks_from(
+            settings.symbol,
+            start,
+            points,
+            self.mt5.COPY_TICKS_INFO,
+        )
+        if ticks is None or len(ticks) == 0:
+            return 50.0
+
+        frame = pd.DataFrame(ticks)
+        spreads = (frame["ask"] - frame["bid"]).loc[lambda s: s > 0]
+        if spreads.empty:
+            return 50.0
+        return float((spreads <= current_spread).mean() * 100.0)
