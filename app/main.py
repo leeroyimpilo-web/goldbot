@@ -5,12 +5,14 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import HTMLResponse
 
+from app.api_models import StrategyRegistrationRequest
 from app.backtest import run_mtf_breakout_backtest
 from app.config import settings
 from app.dashboard import DASHBOARD_HTML
 from app.database import init_db
 from app.decision_engine import DecisionEngine
 from app.experiments import make_experiment
+from app.monte_carlo import bootstrap_monte_carlo
 from app.mt5_gateway import MT5Gateway
 from app.research import parameter_grid_search, research_score
 from app.research_store import (
@@ -20,6 +22,7 @@ from app.research_store import (
     save_experiment,
 )
 from app.risk import live_execution_permitted
+from app.strategy_registry import get_strategy, register_strategy
 from app.walkforward import walk_forward
 
 app = FastAPI(
@@ -261,6 +264,62 @@ def research_notes(limit: int = Query(50, ge=1, le=200)) -> dict:
         return {"ok": True, "notes": recent_research_notes(limit)}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "notes": []}
+
+
+@app.get("/api/research/monte-carlo")
+def research_monte_carlo(
+    h1_bars: int = Query(2500, ge=300, le=10000),
+    m15_bars: int = Query(10000, ge=1000, le=40000),
+    cost_r: float = Query(0.05, ge=0.0, le=1.0),
+    paths: int = Query(5000, ge=100, le=50000),
+) -> dict:
+    h1 = mt5.bars("H1", h1_bars)
+    m15 = mt5.bars("M15", m15_bars)
+    if h1.empty or m15.empty:
+        return {"available": False, "reason": "MT5 historical data unavailable"}
+
+    result = run_mtf_breakout_backtest(h1, m15, round_trip_cost_r=cost_r)
+    returns = [float(t["net_r"]) for t in result["trades"]]
+    if len(returns) < 20:
+        return {
+            "available": False,
+            "reason": "At least 20 historical trades are required",
+            "trade_count": len(returns),
+        }
+
+    summary = bootstrap_monte_carlo(returns, paths=paths)
+    return {
+        "available": True,
+        "strategy": result["strategy"],
+        "historical_metrics": result["metrics"],
+        "monte_carlo": summary.to_dict(),
+        "warning": "Bootstrap results describe resampled historical trade outcomes, not a forecast.",
+    }
+
+
+@app.post("/api/strategies/register")
+def strategies_register(payload: StrategyRegistrationRequest) -> dict:
+    try:
+        record = register_strategy(
+            name=payload.name,
+            version=payload.version,
+            stage=payload.stage,
+            parameters=payload.parameters,
+            metrics=payload.metrics,
+            live_approved=payload.live_approved,
+        )
+        return {"ok": True, "strategy": record}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/strategies/{version}")
+def strategies_get(version: str) -> dict:
+    try:
+        record = get_strategy(version)
+        return {"ok": record is not None, "strategy": record}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "strategy": None}
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
