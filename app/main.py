@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
+from app.backtest import run_mtf_breakout_backtest
 from app.config import settings
 from app.dashboard import DASHBOARD_HTML
 from app.decision_engine import DecisionEngine
@@ -9,7 +10,7 @@ from app.risk import live_execution_permitted
 
 app = FastAPI(
     title="GoldBot AI",
-    version="0.2.0",
+    version="0.3.0",
     description="Research-first XAUUSD trading, risk and strategy-learning platform.",
 )
 
@@ -21,8 +22,8 @@ decision_engine = DecisionEngine(mt5)
 def root() -> dict:
     return {
         "name": "GoldBot AI",
-        "version": "0.2.0",
-        "status": "decision-pipeline-online",
+        "version": "0.3.0",
+        "status": "research-pipeline-online",
         "docs": "/docs",
         "dashboard": "/dashboard",
     }
@@ -82,6 +83,35 @@ def decision() -> dict:
     and broker order validation only.
     """
     return decision_engine.evaluate()
+
+
+@app.get("/api/backtest/mt5")
+def backtest_mt5(
+    h1_bars: int = Query(2500, ge=300, le=10000),
+    m15_bars: int = Query(10000, ge=1000, le=40000),
+    cost_r: float = Query(0.05, ge=0.0, le=1.0),
+    include_trades: bool = False,
+) -> dict:
+    h1 = mt5.bars("H1", h1_bars)
+    m15 = mt5.bars("M15", m15_bars)
+    if h1.empty or m15.empty:
+        return {
+            "available": False,
+            "reason": "MT5 historical data unavailable",
+            "metrics": None,
+        }
+
+    result = run_mtf_breakout_backtest(
+        h1,
+        m15,
+        round_trip_cost_r=cost_r,
+    )
+    result["available"] = True
+    result["source"] = "broker_mt5_completed_bars"
+    if not include_trades:
+        result["trade_sample"] = result["trades"][-20:]
+        result.pop("trades", None)
+    return result
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
