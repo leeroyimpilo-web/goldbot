@@ -1,22 +1,31 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+
 from app.config import settings
 from app.dashboard import DASHBOARD_HTML
+from app.decision_engine import DecisionEngine
 from app.mt5_gateway import MT5Gateway
 from app.risk import live_execution_permitted
 
 app = FastAPI(
     title="GoldBot AI",
-    version="0.1.0",
+    version="0.2.0",
     description="Research-first XAUUSD trading, risk and strategy-learning platform.",
 )
 
 mt5 = MT5Gateway()
+decision_engine = DecisionEngine(mt5)
 
 
 @app.get("/")
 def root() -> dict:
-    return {"name": "GoldBot AI", "version": "0.1.0", "status": "foundation-online", "docs": "/docs", "dashboard": "/dashboard"}
+    return {
+        "name": "GoldBot AI",
+        "version": "0.2.0",
+        "status": "decision-pipeline-online",
+        "docs": "/docs",
+        "dashboard": "/dashboard",
+    }
 
 
 @app.get("/health")
@@ -52,6 +61,27 @@ def mt5_account() -> dict:
 @app.get("/api/mt5/tick")
 def mt5_tick() -> dict:
     return mt5.tick()
+
+
+@app.get("/api/mt5/bars/{timeframe}")
+def mt5_bars(timeframe: str, count: int = 100) -> dict:
+    frame = mt5.bars(timeframe.upper(), min(max(count, 1), 2000))
+    if frame.empty:
+        return {"available": False, "bars": []}
+    data = frame.copy()
+    data["time"] = data["time"].astype(str)
+    return {"available": True, "bars": data.to_dict(orient="records")}
+
+
+@app.get("/api/decision")
+def decision() -> dict:
+    """
+    Build a complete candidate trade decision from MT5 data.
+
+    This endpoint NEVER sends an order. It performs research/paper decisioning
+    and broker order validation only.
+    """
+    return decision_engine.evaluate()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
