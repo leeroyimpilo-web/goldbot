@@ -76,6 +76,17 @@ def run_cycle(
         state["last_closed_plan"] = state.pop("active_plan")
         state["last_closed_plan"]["closed_detected_at"] = datetime.now(timezone.utc).isoformat()
 
+        recent = gateway.recent_closed_goldbot_deals(days=30)
+        consecutive_losses = 0
+        for deal in reversed(recent):
+            if float(deal.get("net_profit", 0.0)) < 0:
+                consecutive_losses += 1
+            else:
+                break
+        state["consecutive_full_stop_losses"] = consecutive_losses
+        state["last_closed_deal"] = recent[-1] if recent else None
+        save_state(state)
+
     latest_bar = gateway.latest_completed_bar_time("M15")
     if latest_bar is None:
         save_state(state)
