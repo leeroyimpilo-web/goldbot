@@ -1,4 +1,8 @@
-from fastapi import FastAPI, Query
+from base64 import b64decode
+import secrets
+
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import JSONResponse
 from fastapi.responses import HTMLResponse
 
 from app.backtest import run_mtf_breakout_backtest
@@ -26,6 +30,43 @@ app = FastAPI(
 
 mt5 = MT5Gateway()
 decision_engine = DecisionEngine(mt5)
+
+
+@app.middleware("http")
+async def protect_dashboard_and_api(request: Request, call_next):
+    if not settings.require_auth or request.url.path in {"/", "/health", "/docs", "/openapi.json"}:
+        return await call_next(request)
+
+    if request.url.path.startswith("/api/") or request.url.path == "/dashboard":
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Basic "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
+                headers={"WWW-Authenticate": "Basic"},
+            )
+        try:
+            decoded = b64decode(auth[6:]).decode("utf-8")
+            username, password = decoded.split(":", 1)
+        except Exception:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid authentication header"},
+                headers={"WWW-Authenticate": "Basic"},
+            )
+
+        if not (
+            secrets.compare_digest(username, settings.dashboard_username)
+            and secrets.compare_digest(password, settings.dashboard_password)
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid credentials"},
+                headers={"WWW-Authenticate": "Basic"},
+            )
+
+    return await call_next(request)
+
 
 
 @app.get("/")
