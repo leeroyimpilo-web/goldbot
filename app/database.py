@@ -130,6 +130,48 @@ class DailyPerformance(Base):
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
 
 
+class ModelVersion(Base):
+    __tablename__ = "model_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    version: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    stage: Mapped[str] = mapped_column(String(32), default="observer", index=True)
+    artifact_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    feature_columns: Mapped[dict] = mapped_column(JSON, default=dict)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    approved_for_filtering: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ModelPrediction(Base):
+    __tablename__ = "model_predictions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    model_version: Mapped[str] = mapped_column(String(64), index=True)
+    strategy_version: Mapped[str] = mapped_column(String(64), index=True)
+    signal_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    probability: Mapped[float] = mapped_column(Float)
+    threshold: Mapped[float] = mapped_column(Float)
+    allowed: Mapped[bool] = mapped_column(Boolean)
+    features: Mapped[dict] = mapped_column(JSON, default=dict)
+    outcome_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class EconomicEventRecord(Base):
+    __tablename__ = "economic_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    name: Mapped[str] = mapped_column(String(256), index=True)
+    currency: Mapped[str] = mapped_column(String(16), default="USD", index=True)
+    impact: Mapped[str] = mapped_column(String(32), default="high", index=True)
+    source: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
