@@ -5,13 +5,15 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import HTMLResponse
 
-from app.api_models import StrategyRegistrationRequest
+from app.api_models import MetaTrainingRequest, StrategyRegistrationRequest
 from app.backtest import run_mtf_breakout_backtest
 from app.config import settings
 from app.dashboard import DASHBOARD_HTML
 from app.database import init_db
 from app.decision_engine import DecisionEngine
 from app.experiments import make_experiment
+from app.ml_meta import save_model, train_meta_model
+from app.model_registry import register_model
 from app.monte_carlo import bootstrap_monte_carlo
 from app.mt5_gateway import MT5Gateway
 from app.research import parameter_grid_search, research_score
@@ -320,6 +322,31 @@ def strategies_get(version: str) -> dict:
         return {"ok": record is not None, "strategy": record}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "strategy": None}
+
+
+@app.post("/api/ai/train")
+def ai_train(payload: MetaTrainingRequest) -> dict:
+    import pandas as pd
+
+    try:
+        frame = pd.DataFrame(payload.rows)
+        model, metrics = train_meta_model(frame)
+        artifact_path = save_model(model, f"models/{payload.version}.joblib")
+        record = register_model(
+            name="goldbot_meta_labeler",
+            version=payload.version,
+            stage=payload.stage,
+            artifact_path=artifact_path,
+            metrics=metrics.to_dict(),
+            approved_for_filtering=False,
+        )
+        return {
+            "ok": True,
+            "model": record,
+            "message": "Model trained as observer-only. It is not approved to filter trades.",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
