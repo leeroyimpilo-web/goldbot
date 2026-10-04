@@ -73,6 +73,11 @@ class MT5Gateway:
         account = self.mt5.account_info()
         if account is None:
             return {"available": False, "error": str(self.mt5.last_error())}
+        trade_mode_map = {
+            getattr(self.mt5, "ACCOUNT_TRADE_MODE_DEMO", -1): "demo",
+            getattr(self.mt5, "ACCOUNT_TRADE_MODE_CONTEST", -2): "contest",
+            getattr(self.mt5, "ACCOUNT_TRADE_MODE_REAL", -3): "real",
+        }
         return {
             "available": True,
             "login": account.login,
@@ -82,6 +87,7 @@ class MT5Gateway:
             "equity": account.equity,
             "margin": account.margin,
             "margin_free": account.margin_free,
+            "trade_mode": trade_mode_map.get(account.trade_mode, "unknown"),
         }
 
     def tick(self) -> dict:
@@ -227,4 +233,52 @@ class MT5Gateway:
             "margin": payload.get("margin"),
             "margin_free": payload.get("margin_free"),
             "margin_level": payload.get("margin_level"),
+        }
+
+
+    def send_market_order(self, plan: Any) -> dict:
+        if not self._ready():
+            return {"ok": False, "reason": "mt5_unavailable"}
+
+        order_type = (
+            self.mt5.ORDER_TYPE_BUY if plan.side == "buy" else self.mt5.ORDER_TYPE_SELL
+        )
+        request = {
+            "action": self.mt5.TRADE_ACTION_DEAL,
+            "symbol": settings.symbol,
+            "volume": float(plan.volume),
+            "type": order_type,
+            "price": float(plan.entry),
+            "sl": float(plan.stop),
+            "tp": float(plan.target),
+            "deviation": 20,
+            "magic": 260100,
+            "comment": f"GoldBot {plan.strategy_version}",
+            "type_time": self.mt5.ORDER_TIME_GTC,
+            "type_filling": self.mt5.ORDER_FILLING_IOC,
+        }
+        result = self.mt5.order_send(request)
+        if result is None:
+            return {
+                "ok": False,
+                "reason": "order_send_returned_none",
+                "last_error": str(self.mt5.last_error()),
+            }
+
+        payload = result._asdict()
+        success_codes = {
+            getattr(self.mt5, "TRADE_RETCODE_DONE", 10009),
+            getattr(self.mt5, "TRADE_RETCODE_PLACED", 10008),
+            getattr(self.mt5, "TRADE_RETCODE_DONE_PARTIAL", 10010),
+        }
+        retcode = int(payload.get("retcode", -1))
+        return {
+            "ok": retcode in success_codes,
+            "retcode": retcode,
+            "comment": payload.get("comment"),
+            "order": payload.get("order"),
+            "deal": payload.get("deal"),
+            "volume": payload.get("volume"),
+            "price": payload.get("price"),
+            "request_id": payload.get("request_id"),
         }
