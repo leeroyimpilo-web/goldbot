@@ -5,12 +5,13 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import HTMLResponse
 
-from app.api_models import MetaTrainingRequest, StrategyRegistrationRequest
+from app.api_models import EconomicEventRequest, MetaTrainingRequest, StrategyRegistrationRequest
 from app.backtest import run_mtf_breakout_backtest
 from app.config import settings
 from app.dashboard import DASHBOARD_HTML
 from app.database import init_db
 from app.decision_engine import DecisionEngine
+from app.economic_calendar import add_event
 from app.experiments import make_experiment
 from app.ml_meta import save_model, train_meta_model
 from app.model_registry import register_model
@@ -25,6 +26,7 @@ from app.research_store import (
 )
 from app.risk import live_execution_permitted
 from app.strategy_registry import get_strategy, register_strategy
+from app.validation import chronological_evaluation
 from app.walkforward import walk_forward
 
 app = FastAPI(
@@ -347,6 +349,47 @@ def ai_train(payload: MetaTrainingRequest) -> dict:
         }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/news/events")
+def news_add_event(payload: EconomicEventRequest) -> dict:
+    from datetime import datetime
+
+    try:
+        scheduled_at = datetime.fromisoformat(payload.scheduled_at.replace("Z", "+00:00"))
+        row_id = add_event(
+            name=payload.name,
+            scheduled_at=scheduled_at,
+            impact=payload.impact,
+            currency=payload.currency,
+            source=payload.source,
+            external_id=payload.external_id,
+        )
+        return {"ok": True, "id": row_id}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.get("/api/research/chronological")
+def research_chronological(
+    h1_bars: int = Query(10000, ge=1000, le=50000),
+    m15_bars: int = Query(40000, ge=4000, le=200000),
+    normal_cost_r: float = Query(0.05, ge=0.0, le=1.0),
+    stress_cost_r: float = Query(0.10, ge=0.0, le=2.0),
+) -> dict:
+    h1 = mt5.bars("H1", h1_bars)
+    m15 = mt5.bars("M15", m15_bars)
+    if h1.empty or m15.empty:
+        return {"available": False, "reason": "MT5 historical data unavailable"}
+    return {
+        "available": True,
+        **chronological_evaluation(
+            h1,
+            m15,
+            normal_cost_r=normal_cost_r,
+            stress_cost_r=stress_cost_r,
+        ),
+    }
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
